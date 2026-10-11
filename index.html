@@ -869,6 +869,9 @@
       pointer-events: none;
     }
     .media-card:hover .media-card-info { opacity: 1; }
+    @media (hover: none) {
+      .media-card-info { opacity: 1; }
+    }
     .media-card-info .mi-desc {
       font-size: 0.82rem;
       font-weight: 500;
@@ -1049,15 +1052,108 @@
     .btn-cancel { background: var(--surface2); color: var(--text); }
     .btn-confirm { background: var(--gold); color: #111; }
 
+    /* Search bar */
+    .search-bar {
+      display: flex;
+      gap: 10px;
+      padding: 12px 20px;
+      background: rgba(15,14,20,0.6);
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+      align-items: center;
+    }
+    .search-bar input[type="text"] {
+      flex: 1;
+      min-width: 0;
+      padding: 10px 14px;
+      background: rgba(255,255,255,0.05);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      color: var(--text);
+      font-size: 0.9rem;
+      outline: none;
+    }
+    .search-bar input[type="text"]:focus {
+      border-color: var(--gold);
+      box-shadow: 0 0 0 3px rgba(212,168,83,0.12);
+    }
+    .search-bar input[type="date"] {
+      width: 140px;
+      padding: 10px 12px;
+      background: rgba(255,255,255,0.05);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      color: var(--text);
+      font-size: 0.85rem;
+      outline: none;
+      color-scheme: dark;
+    }
+    .search-bar input[type="date"]:focus {
+      border-color: var(--gold);
+    }
+    .search-clear {
+      width: 38px;
+      height: 38px;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+      font-size: 0.9rem;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      transition: all 0.2s;
+    }
+    .search-clear:hover {
+      background: rgba(248,113,113,0.15);
+      color: var(--danger);
+      border-color: rgba(248,113,113,0.3);
+    }
+
     @media (max-width: 700px) {
-      .dash-content { gap: 20px; padding: 20px; }
-      .dash-card { width: 180px; height: 230px; padding-top: 30px; }
-      .dash-card-icon-wrap { width: 64px; height: 64px; }
-      .dash-card-icon { font-size: 1.6rem; }
-      .dash-card-title { font-size: 1.15rem; }
-      .topbar { padding: 16px 20px; }
-      .topbar-logo { font-size: 1.5rem; }
-      .books-grid { padding: 20px; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
+      .dash-content { gap: 16px; padding: 16px 12px 40px; }
+      .dash-card { width: 155px; height: 210px; padding-top: 28px; border-radius: 20px; }
+      .dash-card-icon-wrap { width: 58px; height: 58px; margin-bottom: 14px; }
+      .dash-card-icon { font-size: 1.45rem; }
+      .dash-card-title { font-size: 1.05rem; }
+      .dash-card-desc { font-size: 0.75rem; margin-bottom: 16px; }
+      .dash-card-arrow { width: 32px; height: 32px; font-size: 0.95rem; margin-bottom: 20px; }
+      .topbar { padding: 14px 16px; }
+      .topbar-logo { font-size: 1.35rem; }
+      .topbar-tagline { font-size: 0.58rem; letter-spacing: 0.2em; }
+      .btn-icon { width: 40px; height: 40px; font-size: 1.05rem; }
+      .books-grid { padding: 16px; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 14px; }
+      .book-card { height: 170px; padding: 18px 14px; }
+      .section-header { padding: 12px 14px; gap: 10px; }
+      .section-title { font-size: 1.15rem; }
+      .btn-add { padding: 8px 12px; font-size: 0.82rem; }
+      .back-btn { width: 36px; height: 36px; }
+      .media-grid { padding: 16px; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
+      .search-bar { padding: 10px 12px; gap: 8px; flex-wrap: wrap; }
+      .search-bar input[type="text"] { flex: 1 1 100%; font-size: 0.88rem; }
+      .search-bar input[type="date"] { width: auto; flex: 1; min-width: 120px; }
+      .login-card { margin: 16px; padding: 36px 24px; max-width: 100%; }
+      .splash-logo { font-size: 2.8rem; }
+      .editor-top { padding: 12px 14px; }
+      .editor-title { font-size: 1.2rem; }
+      .editor-toolbar { padding: 8px 14px; }
+      .editor-body { padding: 16px 14px 30px; }
+      .notes-list-view { padding: 14px; }
+      .settings-body { margin: 20px auto; padding: 0 14px; }
+      .settings-card { padding: 22px 18px; }
+      .img-modal { padding: 22px 18px; max-width: 95%; }
+      .img-preview-wrap { height: 150px; }
+      .modal { padding: 22px 18px; }
+    }
+
+    @media (max-width: 400px) {
+      .dash-card { width: 140px; height: 195px; padding-top: 24px; }
+      .dash-card-icon-wrap { width: 52px; height: 52px; }
+      .dash-card-icon { font-size: 1.3rem; }
+      .dash-card-title { font-size: 0.95rem; }
+      .media-grid { grid-template-columns: repeat(2, 1fr); }
     }
   </style>
 </head>
@@ -1268,6 +1364,11 @@
         + Add Image
         <input type="file" id="imageInput" accept="image/*" multiple>
       </label>
+    </div>
+    <div class="search-bar">
+      <input type="text" id="imgSearchText" placeholder="Search description...">
+      <input type="date" id="imgSearchDate" title="Filter by date">
+      <button class="search-clear" id="imgSearchClear" title="Clear filters">✕</button>
     </div>
     <div class="media-grid" id="imagesGrid"></div>
   </div>
@@ -1817,9 +1918,21 @@
     currentImageFolderId = id;
     const folder = imageFolders.find(f => f.id === id);
     document.getElementById('imageFolderTitle').textContent = folder ? folder.name : 'Folder';
+    // reset search
+    document.getElementById('imgSearchText').value = '';
+    document.getElementById('imgSearchDate').value = '';
     renderImages();
     showScreen('imagesFolderView');
   }
+
+  // Search filters
+  document.getElementById('imgSearchText').addEventListener('input', () => renderImages());
+  document.getElementById('imgSearchDate').addEventListener('change', () => renderImages());
+  document.getElementById('imgSearchClear').addEventListener('click', () => {
+    document.getElementById('imgSearchText').value = '';
+    document.getElementById('imgSearchDate').value = '';
+    renderImages();
+  });
 
   document.getElementById('imageInput').addEventListener('change', e => {
     if (!currentImageFolderId) {
@@ -1909,10 +2022,29 @@
 
   function renderImages() {
     const grid = document.getElementById('imagesGrid');
-    const folderImages = images.filter(i => i.folderId === currentImageFolderId);
+    const searchText = (document.getElementById('imgSearchText')?.value || '').trim().toLowerCase();
+    const searchDate = document.getElementById('imgSearchDate')?.value || '';
+
+    let folderImages = images.filter(i => i.folderId === currentImageFolderId);
+
+    // Text filter
+    if (searchText) {
+      folderImages = folderImages.filter(i => {
+        const desc = (i.description || '').toLowerCase();
+        const name = (i.name || '').toLowerCase();
+        return desc.includes(searchText) || name.includes(searchText);
+      });
+    }
+    // Date filter
+    if (searchDate) {
+      folderImages = folderImages.filter(i => i.date === searchDate);
+    }
 
     if (folderImages.length === 0) {
-      grid.innerHTML = `<div class="empty"><div class="empty-icon">🖼️</div><p>No images in this folder</p><span>Click + Add Image to upload</span></div>`;
+      const hasFilters = searchText || searchDate;
+      grid.innerHTML = hasFilters
+        ? `<div class="empty"><div class="empty-icon">🔍</div><p>No matching images</p><span>Try different search or clear filters</span></div>`
+        : `<div class="empty"><div class="empty-icon">🖼️</div><p>No images in this folder</p><span>Click + Add Image to upload</span></div>`;
       return;
     }
     grid.innerHTML = folderImages.map(img => {
