@@ -1795,62 +1795,67 @@
     </div>
   </div>
 
-<script>
+<script type="module">
+  // ========== FIREBASE ==========
+  import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js';
+  import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, onAuthStateChanged, updatePassword } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js';
+  import { getFirestore, collection, doc, getDocs, getDoc, setDoc, deleteDoc, onSnapshot, query, orderBy, enableIndexedDbPersistence, serverTimestamp } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
+  import { getStorage, ref as storageRef, uploadBytes, getDownloadURL, deleteObject } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-storage.js';
+
+  const firebaseConfig = {
+    apiKey: "AIzaSyDxKCyP8FYpzrenYpWA3nc2juClspcPrp4",
+    authDomain: "eldorado-82c5e.firebaseapp.com",
+    projectId: "eldorado-82c5e",
+    storageBucket: "eldorado-82c5e.firebasestorage.app",
+    messagingSenderId: "302688248530",
+    appId: "1:302688248530:web:8be6a1df0c05a9bc36030b",
+    measurementId: "G-JD5H7B9LZR"
+  };
+
+  const app = initializeApp(firebaseConfig);
+  const auth = getAuth(app);
+  const db = getFirestore(app);
+  const storage = getStorage(app);
+
+  // Enable offline persistence (best effort)
+  try { enableIndexedDbPersistence(db).catch(() => {}); } catch (e) {}
+
   // ========== DATA ==========
   const DEFAULT_USER = 'fasly';
   const DEFAULT_PASS = '8820';
   const DEFAULT_NOTES_PASS = '8820';
+  const EMAIL_DOMAIN = '@eldorado.app';
 
-  let creds = JSON.parse(localStorage.getItem('eldorado-creds') || 'null') || {
-    user: DEFAULT_USER,
-    pass: DEFAULT_PASS
-  };
-
-  // ===== USERS & ROLES =====
-  // Change this table to change what each role can see on the dashboard.
+  // Role access table – change here to control what each role sees
   const ROLE_ACCESS = {
     owner:   ['notes', 'images', 'videos'],
     officer: ['images', 'videos']
   };
   const ROLE_LABEL = { owner: 'Owner', officer: 'Officer' };
 
-  // users: first run converts the old single login into an Owner account
-  let users = JSON.parse(localStorage.getItem('eldorado-users') || 'null');
-  if (!Array.isArray(users) || users.length === 0) {
-    users = [{ id: 'u-main', username: creds.user, password: creds.pass, role: 'owner' }];
-  }
-  let currentUser = null;
-
-  let notesPass = localStorage.getItem('eldorado-notes-pass') || DEFAULT_NOTES_PASS;
+  let currentUser = null;          // { uid, username, role }
+  let notesPass = DEFAULT_NOTES_PASS;
   let notesUnlocked = false;
 
-  let books = JSON.parse(localStorage.getItem('eldorado-books') || '[]');
-  let notes = JSON.parse(localStorage.getItem('eldorado-notes') || '[]');
-  let imageFolders = JSON.parse(localStorage.getItem('eldorado-image-folders') || '[]');
-  let images = [];   // loaded from IndexedDB (see MEDIA STORAGE below)
+  let books = [];
+  let notes = [];
+  let imageFolders = [];
+  let images = [];                 // metadata + data/url
   let videos = [];
 
   let currentBookId = null;
   let currentNoteId = null;
   let currentImageFolderId = null;
   let saveTimer = null;
+  let unsubscribers = [];          // realtime listeners
 
   // ========== HELPERS ==========
   function uid() {
     return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
   }
 
-  function save() {
-    try {
-      localStorage.setItem('eldorado-users', JSON.stringify(users));
-      localStorage.setItem('eldorado-notes-pass', notesPass);
-      localStorage.setItem('eldorado-books', JSON.stringify(books));
-      localStorage.setItem('eldorado-notes', JSON.stringify(notes));
-      localStorage.setItem('eldorado-image-folders', JSON.stringify(imageFolders));
-    } catch (err) {
-      console.error(err);
-      alert('Phone storage is full or blocked, so your last change may not be saved.');
-    }
+  function toEmail(username) {
+    return (username || '').trim().toLowerCase() + EMAIL_DOMAIN;
   }
 
   function showScreen(id) {
@@ -1890,7 +1895,7 @@
     return tmp.textContent || tmp.innerText || '';
   }
 
-  // ========== MOBILE VIEWPORT (keyboard-aware height) ==========
+  // ========== MOBILE VIEWPORT ==========
   const IS_TOUCH = !!(window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
   (function initViewport() {
     const root = document.documentElement;
@@ -1910,106 +1915,44 @@
     document.addEventListener('focusout', () => setTimeout(() => { window.scrollTo(0, 0); update(); }, 120));
   })();
 
-  // ========== MEDIA STORAGE (IndexedDB - phone photos/videos are too big for localStorage) ==========
-  const mediaDB = {
-    db: null,
-    open() {
-      return new Promise(resolve => {
-        if (!window.indexedDB) return resolve(false);
-        try {
-          const req = indexedDB.open('eldorado-media', 1);
-          req.onupgradeneeded = () => {
-            const db = req.result;
-            if (!db.objectStoreNames.contains('images')) db.createObjectStore('images', { keyPath: 'id' });
-            if (!db.objectStoreNames.contains('videos')) db.createObjectStore('videos', { keyPath: 'id' });
-          };
-          req.onsuccess = () => { this.db = req.result; resolve(true); };
-          req.onerror = () => resolve(false);
-          req.onblocked = () => resolve(false);
-        } catch (e) { resolve(false); }
-      });
-    },
-    run(store, mode, fn) {
-      return new Promise((resolve, reject) => {
-        const t = this.db.transaction(store, mode);
-        const r = fn(t.objectStore(store));
-        t.oncomplete = () => resolve(r ? r.result : undefined);
-        t.onerror = () => reject(t.error);
-        t.onabort = () => reject(t.error);
-      });
-    },
-    put(store, obj) { return this.run(store, 'readwrite', s => s.put(obj)); },
-    del(store, id) { return this.run(store, 'readwrite', s => s.delete(id)); },
-    all(store) { return this.run(store, 'readonly', s => s.getAll()); }
-  };
-
-  function mediaSaveError(err) {
-    console.error(err);
-    alert('Could not save to phone storage. Free up some space and try again.');
-  }
-  function dataUrlToBlob(d) {
-    const parts = d.split(',');
-    const mime = (parts[0].match(/:(.*?);/) || [])[1] || 'video/mp4';
-    const bin = atob(parts[1]);
-    const arr = new Uint8Array(bin.length);
-    for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
-    return new Blob([arr], { type: mime });
-  }
-  function saveImagesFallback() {
-    try { localStorage.setItem('eldorado-images', JSON.stringify(images)); }
-    catch (e) { mediaSaveError(e); }
-  }
-  function saveImage(img) {
-    if (mediaDB.db) mediaDB.put('images', img).catch(mediaSaveError);
-    else saveImagesFallback();
-  }
-  function removeImages(ids) {
-    if (mediaDB.db) ids.forEach(id => mediaDB.del('images', id).catch(console.error));
-    else saveImagesFallback();
-  }
-  function saveVideo(v) {
-    if (mediaDB.db) mediaDB.put('videos', { id: v.id, name: v.name, blob: v.blob, created: v.created }).catch(mediaSaveError);
-  }
-  function removeVideo(v) {
-    if (v.url && v.url.startsWith('blob:')) URL.revokeObjectURL(v.url);
-    if (mediaDB.db) mediaDB.del('videos', v.id).catch(console.error);
+  // ========== FIRESTORE HELPERS ==========
+  async function loadCollection(name) {
+    const snap = await getDocs(collection(db, name));
+    return snap.docs.map(d => ({ id: d.id, ...d.data() }));
   }
 
-  const mediaReady = (async function initMedia() {
-    const ok = await mediaDB.open();
-    let legacyImgs = [], legacyVids = [];
-    try { legacyImgs = JSON.parse(localStorage.getItem('eldorado-images') || '[]'); } catch (e) {}
-    try { legacyVids = JSON.parse(localStorage.getItem('eldorado-videos') || '[]'); } catch (e) {}
+  async function saveDoc(col, id, data) {
+    await setDoc(doc(db, col, id), data, { merge: true });
+  }
 
-    if (!ok) {                       // browser blocks IndexedDB: old behaviour
-      images = legacyImgs;
-      videos = legacyVids.map(v => Object.assign({}, v, { url: v.data }));
-      return;
-    }
-    try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch (e) {}
+  async function removeDoc(col, id) {
+    await deleteDoc(doc(db, col, id));
+  }
 
-    // move old localStorage media into IndexedDB (nothing is lost)
+  // ========== MEDIA (Storage) ==========
+  async function uploadImageBlob(id, dataUrl) {
+    const res = await fetch(dataUrl);
+    const blob = await res.blob();
+    const path = `images/${id}`;
+    const sref = storageRef(storage, path);
+    await uploadBytes(sref, blob, { contentType: 'image/jpeg' });
+    return getDownloadURL(sref);
+  }
+
+  async function uploadVideoFile(id, fileOrBlob) {
+    const path = `videos/${id}`;
+    const sref = storageRef(storage, path);
+    await uploadBytes(sref, fileOrBlob);
+    return getDownloadURL(sref);
+  }
+
+  async function deleteStorageFile(path) {
     try {
-      if (legacyImgs.length || legacyVids.length) {
-        for (const im of legacyImgs) await mediaDB.put('images', im);
-        for (const v of legacyVids) {
-          if (!v.data) continue;
-          await mediaDB.put('videos', { id: v.id, name: v.name, blob: dataUrlToBlob(v.data), created: v.created });
-        }
-        localStorage.removeItem('eldorado-images');
-        localStorage.removeItem('eldorado-videos');
-      }
-    } catch (err) { console.error('Media migration failed', err); }
+      await deleteObject(storageRef(storage, path));
+    } catch (e) { console.warn('Storage delete', e); }
+  }
 
-    try {
-      images = (await mediaDB.all('images')).sort((a, b) => (b.created || 0) - (a.created || 0));
-      videos = (await mediaDB.all('videos'))
-        .sort((a, b) => (a.created || 0) - (b.created || 0))
-        .map(v => Object.assign({}, v, { url: URL.createObjectURL(v.blob) }));
-    } catch (err) { console.error(err); }
-  })();
-
-  // Resize big phone photos before saving (keeps storage small, loads fast)
+  // Resize big phone photos
   function fileToDataURL(file) {
     return new Promise((resolve, reject) => {
       const r = new FileReader();
@@ -2053,6 +1996,34 @@
     });
   }
 
+  // ========== LOAD ALL DATA AFTER LOGIN ==========
+  async function loadAllData() {
+    try {
+      // Notes password (shared setting)
+      const npSnap = await getDoc(doc(db, 'settings', 'notesPass'));
+      notesPass = (npSnap.exists() && npSnap.data().value) ? npSnap.data().value : DEFAULT_NOTES_PASS;
+
+      books = await loadCollection('books');
+      notes = await loadCollection('notes');
+      imageFolders = await loadCollection('imageFolders');
+      const imgMetas = await loadCollection('images');
+      images = imgMetas.map(m => ({ ...m, data: m.url || '' })); // url becomes data for display
+
+      const vidMetas = await loadCollection('videos');
+      videos = vidMetas.map(v => ({ ...v, url: v.url || '' }));
+
+      // Sort
+      books.sort((a,b) => (b.created||0) - (a.created||0));
+      notes.sort((a,b) => (b.updated||0) - (a.updated||0));
+      imageFolders.sort((a,b) => (b.created||0) - (a.created||0));
+      images.sort((a,b) => (b.created||0) - (a.created||0));
+      videos.sort((a,b) => (a.created||0) - (b.created||0));
+    } catch (err) {
+      console.error('Load data error', err);
+      alert('Could not load data from cloud. Check internet / Firebase rules.');
+    }
+  }
+
   // ========== SPLASH → LOGIN ==========
   setTimeout(() => {
     document.getElementById('splash').classList.remove('active');
@@ -2063,7 +2034,7 @@
     }, 400);
   }, 2600);
 
-  // ========== LOGIN ==========
+  // ========== LOGIN (Firebase Auth) ==========
   document.getElementById('btnLogin').addEventListener('click', doLogin);
   document.getElementById('loginPass').addEventListener('keydown', e => {
     if (e.key === 'Enter') doLogin();
@@ -2072,18 +2043,63 @@
     if (e.key === 'Enter') document.getElementById('loginPass').focus();
   });
 
-  function doLogin() {
+  async function doLogin() {
     const u = document.getElementById('loginUser').value.trim();
     const p = document.getElementById('loginPass').value;
     const err = document.getElementById('loginError');
-    const found = users.find(x => x.username.toLowerCase() === u.toLowerCase() && x.password === p);
-    if (found) {
-      err.textContent = '';
+    if (!u || !p) {
+      err.textContent = 'Enter username and password';
+      return;
+    }
+    err.textContent = 'Signing in...';
+    const email = toEmail(u);
+
+    try {
+      let cred;
+      try {
+        cred = await signInWithEmailAndPassword(auth, email, p);
+      } catch (signErr) {
+        // Auto-create default owner on first run
+        if ((signErr.code === 'auth/user-not-found' || signErr.code === 'auth/invalid-credential') &&
+            u.toLowerCase() === DEFAULT_USER && p === DEFAULT_PASS) {
+          cred = await createUserWithEmailAndPassword(auth, email, p);
+          await setDoc(doc(db, 'users', cred.user.uid), {
+            username: DEFAULT_USER,
+            role: 'owner',
+            created: Date.now()
+          });
+        } else {
+          throw signErr;
+        }
+      }
+
+      // Load role
+      const userSnap = await getDoc(doc(db, 'users', cred.user.uid));
+      let role = 'officer';
+      let username = u;
+      if (userSnap.exists()) {
+        role = userSnap.data().role || 'officer';
+        username = userSnap.data().username || u;
+      } else {
+        // First time any user – make owner if default
+        role = (u.toLowerCase() === DEFAULT_USER) ? 'owner' : 'officer';
+        await setDoc(doc(db, 'users', cred.user.uid), {
+          username: u,
+          role,
+          created: Date.now()
+        });
+      }
+
+      currentUser = { uid: cred.user.uid, username, role };
       notesUnlocked = false;
-      currentUser = found;
+      err.textContent = '';
+      await loadAllData();
       showWelcome();
-    } else {
-      err.textContent = 'Wrong username or password';
+    } catch (e) {
+      console.error(e);
+      err.textContent = (e.code === 'auth/wrong-password' || e.code === 'auth/invalid-credential')
+        ? 'Wrong username or password'
+        : (e.message || 'Login failed');
     }
   }
 
@@ -2138,9 +2154,10 @@
     });
   });
 
-  document.getElementById('btnLogout').addEventListener('click', () => {
+  document.getElementById('btnLogout').addEventListener('click', async () => {
     notesUnlocked = false;
     currentUser = null;
+    try { await signOut(auth); } catch(e){}
     document.getElementById('loginUser').value = '';
     document.getElementById('loginPass').value = '';
     document.getElementById('loginError').textContent = '';
@@ -2177,9 +2194,9 @@
     }
   }
 
-  // ========== APP SETTINGS ==========
+  // ========== APP SETTINGS (change own username/password) ==========
   document.getElementById('backFromSettings').addEventListener('click', () => showScreen('dashboard'));
-  document.getElementById('btnSaveCreds').addEventListener('click', () => {
+  document.getElementById('btnSaveCreds').addEventListener('click', async () => {
     const nu = document.getElementById('setUser').value.trim();
     const np = document.getElementById('setPass').value;
     const np2 = document.getElementById('setPass2').value;
@@ -2199,17 +2216,23 @@
       msg.className = 'settings-msg error';
       return;
     }
-    if (users.some(x => x !== currentUser && x.username.toLowerCase() === nu.toLowerCase())) {
-      msg.textContent = 'That username is already taken';
+    try {
+      // Update Firestore username
+      await setDoc(doc(db, 'users', currentUser.uid), { username: nu }, { merge: true });
+      currentUser.username = nu;
+
+      // Update Auth password if provided
+      if (np && auth.currentUser) {
+        await updatePassword(auth.currentUser, np);
+      }
+      msg.textContent = 'Credentials updated successfully!';
+      msg.className = 'settings-msg success';
+      renderUsers();
+    } catch (e) {
+      console.error(e);
+      msg.textContent = e.message || 'Update failed';
       msg.className = 'settings-msg error';
-      return;
     }
-    currentUser.username = nu;
-    if (np) currentUser.password = np;
-    save();
-    renderUsers();
-    msg.textContent = 'Credentials updated successfully!';
-    msg.className = 'settings-msg success';
   });
 
   // ========== USER MANAGEMENT (Owner only) ==========
@@ -2221,28 +2244,32 @@
     if (isOwner) renderUsers();
   }
 
-  function renderUsers() {
+  async function renderUsers() {
     const list = document.getElementById('usersList');
     if (!currentUser || currentUser.role !== 'owner') return;
-    list.innerHTML = users.map(u => `
-      <div class="user-row">
-        <div class="user-row-name">${escapeHtml(u.username)}${u === currentUser ? ' <small>(you)</small>' : ''}</div>
-        <span class="role-badge">${ROLE_LABEL[u.role]}</span>
-        ${u === currentUser ? '' : `<button class="user-del" data-id="${u.id}" title="Remove user">🗑️</button>`}
-      </div>
-    `).join('');
-    list.querySelectorAll('.user-del').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const u = users.find(x => x.id === btn.dataset.id);
-        if (!u || !confirm('Remove user "' + u.username + '"?')) return;
-        users = users.filter(x => x.id !== u.id);
-        save();
-        renderUsers();
+    try {
+      const snap = await getDocs(collection(db, 'users'));
+      const allUsers = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      list.innerHTML = allUsers.map(u => `
+        <div class="user-row">
+          <div class="user-row-name">${escapeHtml(u.username)}${u.id === currentUser.uid ? ' <small>(you)</small>' : ''}</div>
+          <span class="role-badge">${ROLE_LABEL[u.role] || u.role}</span>
+          ${u.id === currentUser.uid ? '' : `<button class="user-del" data-id="${u.id}" title="Remove user">🗑️</button>`}
+        </div>
+      `).join('');
+      list.querySelectorAll('.user-del').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          if (!confirm('Remove this user? (Auth account remains, but role access is removed)')) return;
+          await removeDoc('users', btn.dataset.id);
+          renderUsers();
+        });
       });
-    });
+    } catch (e) {
+      list.innerHTML = '<p style="color:var(--danger)">Could not load users</p>';
+    }
   }
 
-  document.getElementById('btnAddUser').addEventListener('click', () => {
+  document.getElementById('btnAddUser').addEventListener('click', async () => {
     const msg = document.getElementById('addUserMsg');
     const fail = t => { msg.textContent = t; msg.className = 'settings-msg error'; };
     if (!currentUser || currentUser.role !== 'owner') return fail('Only the owner can add users');
@@ -2251,16 +2278,46 @@
     const p2 = document.getElementById('newUserPass2').value;
     const role = document.getElementById('newUserRole').value;
     if (!name) return fail('Username cannot be empty');
-    if (users.some(x => x.username.toLowerCase() === name.toLowerCase())) return fail('That username is already taken');
     if (p.length < 4) return fail('Password must be at least 4 characters');
     if (p !== p2) return fail('Passwords do not match');
     if (!ROLE_ACCESS[role]) return fail('Choose a role');
-    users.push({ id: uid(), username: name, password: p, role });
-    save();
-    ['newUserName', 'newUserPass', 'newUserPass2'].forEach(id => document.getElementById(id).value = '');
-    renderUsers();
-    msg.textContent = 'User "' + name + '" added as ' + ROLE_LABEL[role];
-    msg.className = 'settings-msg success';
+
+    try {
+      // Create Auth account
+      const email = toEmail(name);
+      const cred = await createUserWithEmailAndPassword(auth, email, p);
+      // Note: this signs us in as the new user – we must re-sign as owner
+      // Better approach: just create the Firestore record and tell owner the credentials.
+      // For simplicity we create Auth + Firestore, then sign back the owner.
+      await setDoc(doc(db, 'users', cred.user.uid), {
+        username: name,
+        role,
+        created: Date.now()
+      });
+
+      // Re-login the original owner (we lost the session)
+      await signOut(auth);
+      // We need the owner's current password – ask or store temporarily is hard.
+      // Practical solution for this app: create only Firestore user record.
+      // Auth account can be created later by the person themselves, or we keep simple.
+      // Revert: for reliability we create Auth under a temporary flow.
+
+      // Simpler reliable way used here:
+      // We already created the Auth user. Now sign the owner back in.
+      // But we don't have the owner's password in memory securely.
+      // So after create we alert and force re-login.
+      alert('User "' + name + '" created as ' + ROLE_LABEL[role] + '.\n\nYou will be logged out. Please login again with your owner account.');
+      currentUser = null;
+      showScreen('login');
+      document.getElementById('loginUser').value = '';
+      document.getElementById('loginPass').value = '';
+      msg.textContent = 'User added. Please login again.';
+      msg.className = 'settings-msg success';
+    } catch (e) {
+      console.error(e);
+      if (e.code === 'auth/email-already-in-use') fail('That username already exists');
+      else fail(e.message || 'Could not add user');
+    }
   });
 
   // ========== NOTES PASSWORD SETTINGS ==========
@@ -2276,7 +2333,7 @@
     renderBooks();
     showScreen('notesSection');
   });
-  document.getElementById('btnSaveNotesPass').addEventListener('click', () => {
+  document.getElementById('btnSaveNotesPass').addEventListener('click', async () => {
     const curr = document.getElementById('notesCurrentPass').value;
     const np = document.getElementById('notesNewPass').value;
     const np2 = document.getElementById('notesNewPass2').value;
@@ -2297,10 +2354,15 @@
       msg.className = 'settings-msg error';
       return;
     }
-    notesPass = np;
-    save();
-    msg.textContent = 'Notes password updated!';
-    msg.className = 'settings-msg success';
+    try {
+      notesPass = np;
+      await setDoc(doc(db, 'settings', 'notesPass'), { value: np });
+      msg.textContent = 'Notes password updated!';
+      msg.className = 'settings-msg success';
+    } catch (e) {
+      msg.textContent = 'Could not save: ' + (e.message || '');
+      msg.className = 'settings-msg error';
+    }
   });
 
   // ========== BOOKS ==========
@@ -2308,11 +2370,13 @@
     notesUnlocked = false;
     showScreen('dashboard');
   });
-  document.getElementById('btnNewBook').addEventListener('click', () => {
+  document.getElementById('btnNewBook').addEventListener('click', async () => {
     const name = prompt('Book name:');
     if (!name || !name.trim()) return;
-    books.push({ id: uid(), name: name.trim(), created: Date.now() });
-    save();
+    const id = uid();
+    const book = { id, name: name.trim(), created: Date.now() };
+    books.unshift(book);
+    await saveDoc('books', id, { name: book.name, created: book.created });
     renderBooks();
   });
 
@@ -2345,13 +2409,15 @@
       });
     });
     grid.querySelectorAll('.book-delete').forEach(btn => {
-      btn.addEventListener('click', e => {
+      btn.addEventListener('click', async e => {
         e.stopPropagation();
         if (!confirm('Delete this book and all its notes?')) return;
         const id = btn.dataset.id;
+        const noteIds = notes.filter(n => n.bookId === id).map(n => n.id);
         books = books.filter(b => b.id !== id);
         notes = notes.filter(n => n.bookId !== id);
-        save();
+        await removeDoc('books', id);
+        for (const nid of noteIds) await removeDoc('notes', nid);
         renderBooks();
       });
     });
@@ -2370,9 +2436,10 @@
     renderBooks();
     showScreen('notesSection');
   });
-  document.getElementById('btnNewNote').addEventListener('click', () => {
+  document.getElementById('btnNewNote').addEventListener('click', async () => {
+    const id = uid();
     const note = {
-      id: uid(),
+      id,
       bookId: currentBookId,
       title: '',
       content: '',
@@ -2380,7 +2447,13 @@
       updated: Date.now()
     };
     notes.unshift(note);
-    save();
+    await saveDoc('notes', id, {
+      bookId: note.bookId,
+      title: note.title,
+      content: note.content,
+      created: note.created,
+      updated: note.updated
+    });
     openNote(note.id);
   });
 
@@ -2422,11 +2495,11 @@
     renderNotesList();
     showScreen('notesListSection');
   });
-  document.getElementById('btnDeleteNote').addEventListener('click', () => {
+  document.getElementById('btnDeleteNote').addEventListener('click', async () => {
     if (!currentNoteId) return;
     if (!confirm('Delete this note?')) return;
     notes = notes.filter(n => n.id !== currentNoteId);
-    save();
+    await removeDoc('notes', currentNoteId);
     currentNoteId = null;
     renderNotesList();
     showScreen('notesListSection');
@@ -2437,11 +2510,11 @@
 
   editorTitle.addEventListener('input', () => {
     clearTimeout(saveTimer);
-    saveTimer = setTimeout(autoSaveNote, 400);
+    saveTimer = setTimeout(autoSaveNote, 600);
   });
   editorContent.addEventListener('input', () => {
     clearTimeout(saveTimer);
-    saveTimer = setTimeout(autoSaveNote, 400);
+    saveTimer = setTimeout(autoSaveNote, 600);
   });
   editorContent.addEventListener('paste', e => {
     e.preventDefault();
@@ -2459,14 +2532,24 @@
     if (!IS_TOUCH || (!note.title && !note.content)) editorTitle.focus();
   }
 
-  function autoSaveNote() {
+  async function autoSaveNote() {
     if (!currentNoteId) return;
     const note = notes.find(n => n.id === currentNoteId);
     if (!note) return;
     note.title = editorTitle.value;
     note.content = editorContent.innerHTML;
     note.updated = Date.now();
-    save();
+    try {
+      await saveDoc('notes', note.id, {
+        bookId: note.bookId,
+        title: note.title,
+        content: note.content,
+        created: note.created,
+        updated: note.updated
+      });
+    } catch (e) {
+      console.error('Note save failed', e);
+    }
   }
 
   // ========== TABLE ==========
@@ -2497,6 +2580,8 @@
   // ========== IMAGES (Folder based) ==========
   let pendingImageData = null;
   let editingImageId = null;
+  let pendingQueue = [];
+  let queueTotal = 0;
 
   document.getElementById('backFromImages').addEventListener('click', () => showScreen('dashboard'));
 
@@ -2506,11 +2591,13 @@
     showScreen('imagesSection');
   });
 
-  document.getElementById('btnNewImageFolder').addEventListener('click', () => {
+  document.getElementById('btnNewImageFolder').addEventListener('click', async () => {
     const name = prompt('Folder name:');
     if (!name || !name.trim()) return;
-    imageFolders.push({ id: uid(), name: name.trim(), created: Date.now() });
-    save();
+    const id = uid();
+    const folder = { id, name: name.trim(), created: Date.now() };
+    imageFolders.unshift(folder);
+    await saveDoc('imageFolders', id, { name: folder.name, created: folder.created });
     renderImageFolders();
   });
 
@@ -2543,15 +2630,18 @@
       });
     });
     grid.querySelectorAll('.book-delete').forEach(btn => {
-      btn.addEventListener('click', e => {
+      btn.addEventListener('click', async e => {
         e.stopPropagation();
         if (!confirm('Delete this folder and all images inside?')) return;
         const id = btn.dataset.id;
-        const removedIds = images.filter(i => i.folderId === id).map(i => i.id);
+        const toRemove = images.filter(i => i.folderId === id);
         imageFolders = imageFolders.filter(f => f.id !== id);
         images = images.filter(i => i.folderId !== id);
-        removeImages(removedIds);
-        save();
+        await removeDoc('imageFolders', id);
+        for (const img of toRemove) {
+          await removeDoc('images', img.id);
+          if (img.storagePath) await deleteStorageFile(img.storagePath);
+        }
         renderImageFolders();
       });
     });
@@ -2561,14 +2651,12 @@
     currentImageFolderId = id;
     const folder = imageFolders.find(f => f.id === id);
     document.getElementById('imageFolderTitle').textContent = folder ? folder.name : 'Folder';
-    // reset search
     document.getElementById('imgSearchText').value = '';
     document.getElementById('imgSearchDate').value = '';
     renderImages();
     showScreen('imagesFolderView');
   }
 
-  // Search filters
   document.getElementById('imgSearchText').addEventListener('input', () => renderImages());
   document.getElementById('imgSearchDate').addEventListener('change', () => renderImages());
   document.getElementById('imgSearchClear').addEventListener('click', () => {
@@ -2576,9 +2664,6 @@
     document.getElementById('imgSearchDate').value = '';
     renderImages();
   });
-
-  let pendingQueue = [];
-  let queueTotal = 0;
 
   document.getElementById('imageInput').addEventListener('change', e => {
     const input = e.target;
@@ -2619,7 +2704,7 @@
 
     if (existing) {
       title.textContent = 'Edit Image Details';
-      preview.src = existing.data;
+      preview.src = existing.data || existing.url || '';
       desc.value = existing.description || '';
       dateInput.value = existing.date || '';
       editingImageId = existing.id;
@@ -2643,40 +2728,74 @@
     queueTotal = 0;
   });
 
-  document.getElementById('imgMetaSave').addEventListener('click', () => {
+  document.getElementById('imgMetaSave').addEventListener('click', async () => {
     const desc = document.getElementById('imgDesc').value.trim();
     const dateVal = document.getElementById('imgDate').value;
     let continueQueue = false;
+    const saveBtn = document.getElementById('imgMetaSave');
+    saveBtn.disabled = true;
+    saveBtn.textContent = 'Saving...';
 
-    if (editingImageId) {
-      const img = images.find(i => i.id === editingImageId);
-      if (img) {
-        img.description = desc;
-        img.date = dateVal;
-        img.updated = Date.now();
-        saveImage(img);
+    try {
+      if (editingImageId) {
+        const img = images.find(i => i.id === editingImageId);
+        if (img) {
+          img.description = desc;
+          img.date = dateVal;
+          img.updated = Date.now();
+          await saveDoc('images', img.id, {
+            folderId: img.folderId,
+            name: img.name,
+            description: desc,
+            date: dateVal,
+            created: img.created,
+            updated: img.updated,
+            storagePath: img.storagePath || `images/${img.id}`,
+            url: img.url || img.data
+          });
+          renderImages();
+        }
+      } else if (pendingImageData && currentImageFolderId) {
+        const id = uid();
+        const storagePath = `images/${id}`;
+        // Upload to Storage
+        const url = await uploadImageBlob(id, pendingImageData.data);
+        const img = {
+          id,
+          folderId: currentImageFolderId,
+          name: pendingImageData.name,
+          description: desc,
+          date: dateVal,
+          created: Date.now(),
+          updated: Date.now(),
+          storagePath,
+          url,
+          data: url          // for immediate display
+        };
+        images.unshift(img);
+        await saveDoc('images', id, {
+          folderId: img.folderId,
+          name: img.name,
+          description: desc,
+          date: dateVal,
+          created: img.created,
+          updated: img.updated,
+          storagePath,
+          url
+        });
         renderImages();
+        continueQueue = pendingQueue.length > 0;
       }
-    } else if (pendingImageData && currentImageFolderId) {
-      const img = {
-        id: uid(),
-        folderId: currentImageFolderId,
-        name: pendingImageData.name,
-        data: pendingImageData.data,
-        description: desc,
-        date: dateVal,
-        created: Date.now(),
-        updated: Date.now()
-      };
-      images.unshift(img);
-      saveImage(img);
-      renderImages();
-      continueQueue = pendingQueue.length > 0;
+    } catch (e) {
+      console.error(e);
+      alert('Failed to save image: ' + (e.message || e));
     }
 
     document.getElementById('imgMetaModal').classList.remove('show');
     pendingImageData = null;
     editingImageId = null;
+    saveBtn.disabled = false;
+    saveBtn.textContent = 'Save Image';
     if (continueQueue) setTimeout(nextPendingImage, 150);
     else { pendingQueue = []; queueTotal = 0; }
   });
@@ -2688,7 +2807,6 @@
 
     let folderImages = images.filter(i => i.folderId === currentImageFolderId);
 
-    // Text filter
     if (searchText) {
       folderImages = folderImages.filter(i => {
         const desc = (i.description || '').toLowerCase();
@@ -2696,7 +2814,6 @@
         return desc.includes(searchText) || name.includes(searchText);
       });
     }
-    // Date filter
     if (searchDate) {
       folderImages = folderImages.filter(i => i.date === searchDate);
     }
@@ -2711,9 +2828,10 @@
     grid.innerHTML = folderImages.map(img => {
       const descText = img.description || img.name || 'No description';
       const dateText = img.date ? formatImgDate(img.date) : formatDate(img.created);
+      const src = img.data || img.url || '';
       return `
         <div class="media-card" data-id="${img.id}">
-          <img src="${img.data}" alt="${escapeHtml(img.name || '')}">
+          <img src="${src}" alt="${escapeHtml(img.name || '')}" loading="lazy">
           <div class="media-card-info">
             <div class="mi-desc">${escapeHtml(descText)}</div>
             <div class="mi-meta">
@@ -2726,11 +2844,13 @@
     }).join('');
 
     grid.querySelectorAll('.book-delete').forEach(btn => {
-      btn.addEventListener('click', e => {
+      btn.addEventListener('click', async e => {
         e.stopPropagation();
         if (!confirm('Delete this image?')) return;
+        const img = images.find(i => i.id === btn.dataset.id);
         images = images.filter(i => i.id !== btn.dataset.id);
-        removeImages([btn.dataset.id]);
+        await removeDoc('images', btn.dataset.id);
+        if (img && img.storagePath) await deleteStorageFile(img.storagePath);
         renderImages();
       });
     });
@@ -2756,20 +2876,38 @@
 
   // ========== VIDEOS ==========
   document.getElementById('backFromVideos').addEventListener('click', () => showScreen('dashboard'));
-  document.getElementById('videoInput').addEventListener('change', e => {
+  document.getElementById('videoInput').addEventListener('change', async e => {
     const MAX_BYTES = 200 * 1024 * 1024;
-    if (!mediaDB.db) alert('This browser cannot store videos permanently. They will disappear when you close the page.');
-    Array.from(e.target.files).forEach(file => {
-      if (!(file.type.startsWith('video/') || /\.(mp4|mov|m4v|webm|3gp|mkv)$/i.test(file.name))) return;
-      if (file.size > MAX_BYTES) {
-        alert('"' + file.name + '" is too large (max 200 MB). Try a shorter clip.');
-        return;
-      }
-      const v = { id: uid(), name: file.name, blob: file, created: Date.now(), url: URL.createObjectURL(file) };
-      videos.push(v);
-      saveVideo(v);
-    });
+    const files = Array.from(e.target.files);
     e.target.value = '';
+    for (const file of files) {
+      if (!(file.type.startsWith('video/') || /\.(mp4|mov|m4v|webm|3gp|mkv)$/i.test(file.name))) continue;
+      if (file.size > MAX_BYTES) {
+        alert('"' + file.name + '" is too large (max 200 MB).');
+        continue;
+      }
+      const id = uid();
+      try {
+        const url = await uploadVideoFile(id, file);
+        const v = {
+          id,
+          name: file.name,
+          created: Date.now(),
+          storagePath: `videos/${id}`,
+          url
+        };
+        videos.push(v);
+        await saveDoc('videos', id, {
+          name: v.name,
+          created: v.created,
+          storagePath: v.storagePath,
+          url
+        });
+      } catch (err) {
+        console.error(err);
+        alert('Failed to upload video: ' + (err.message || err));
+      }
+    }
     renderVideos();
   });
 
@@ -2786,18 +2924,19 @@
       </div>
     `).join('');
     grid.querySelectorAll('.book-delete').forEach(btn => {
-      btn.addEventListener('click', e => {
+      btn.addEventListener('click', async e => {
         e.stopPropagation();
         if (!confirm('Delete this video?')) return;
         const v = videos.find(x => x.id === btn.dataset.id);
-        if (v) removeVideo(v);
         videos = videos.filter(x => x.id !== btn.dataset.id);
+        await removeDoc('videos', btn.dataset.id);
+        if (v && v.storagePath) await deleteStorageFile(v.storagePath);
         renderVideos();
       });
     });
   }
 
-  // ========== BACK NAVIGATION (swipe, Android back button) ==========
+  // ========== BACK NAVIGATION ==========
   function getBackAction() {
     const modal = document.querySelector('.modal-overlay.show');
     if (modal) {
@@ -2829,16 +2968,15 @@
     }
   }
 
-  // ========== MOBILE SWIPE GESTURES ==========
+  // Swipe + history back (same as original)
   (function initSwipeGestures() {
     let startX = 0, startY = 0, startTime = 0;
-    const THRESHOLD = 70;       // min px to count as swipe
-    const MAX_VERTICAL = 80;    // reject if too much vertical movement
-    const MAX_TIME = 500;       // ms
+    const THRESHOLD = 70;
+    const MAX_VERTICAL = 80;
+    const MAX_TIME = 500;
 
     document.addEventListener('touchstart', e => {
       if (e.touches.length !== 1) return;
-      // ignore if starting on input/textarea/contenteditable
       const t = e.target;
       if (t.closest('input, textarea, select, [contenteditable="true"], video, .modal-overlay.show')) return;
       startX = e.touches[0].clientX;
@@ -2853,15 +2991,10 @@
       const dy = touch.clientY - startY;
       const dt = Date.now() - startTime;
       startTime = 0;
-
-      if (dt > MAX_TIME) return;
-      if (Math.abs(dy) > MAX_VERTICAL) return;
-
-      // Swipe right → Go Back
+      if (dt > MAX_TIME || Math.abs(dy) > MAX_VERTICAL) return;
       if (dx > THRESHOLD) {
         const action = getBackAction();
         if (action) {
-          // subtle visual feedback
           const active = document.querySelector('.screen.active');
           if (active) {
             active.style.transition = 'transform 0.25s ease, opacity 0.25s ease';
@@ -2873,15 +3006,12 @@
               active.style.opacity = '';
               action();
             }, 180);
-          } else {
-            action();
-          }
+          } else action();
         }
       }
     }, { passive: true });
   })();
 
-  // Android back button / browser back: go up one screen instead of leaving the app
   (function initHistoryBack() {
     try {
       history.replaceState({ eld: 0 }, '');
@@ -2905,7 +3035,7 @@
     });
   })();
 
-  // Phones kill background tabs without warning: save the open note right away
+  // Flush note on background
   function flushNote() {
     if (!currentNoteId) return;
     const ed = document.getElementById('editor');
@@ -2919,5 +3049,6 @@
   });
   window.addEventListener('pagehide', flushNote);
 </script>
+
 </body>
 </html>
