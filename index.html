@@ -1676,6 +1676,58 @@
       .seg-btn { padding: 8px 12px; }
     }
 
+
+    /* ===== IMAGE PREVIEW (LIGHTBOX) ===== */
+    .lb-overlay {
+      position: fixed; inset: 0; z-index: 10000;
+      background: rgba(0,0,0,0.94);
+      display: none; flex-direction: column;
+    }
+    .lb-overlay.show { display: flex; }
+    .lb-top {
+      display: flex; align-items: center; gap: 10px;
+      padding: calc(env(safe-area-inset-top, 0px) + 10px) 14px 10px;
+      color: #fff; flex-shrink: 0;
+    }
+    .lb-count { font-size: 13px; opacity: .75; min-width: 54px; }
+    .lb-spacer { flex: 1; }
+    .lb-btn {
+      background: rgba(255,255,255,0.12); color: #fff; border: 1px solid rgba(255,255,255,0.18);
+      border-radius: 10px; padding: 8px 14px; font-size: 13px; cursor: pointer;
+      text-decoration: none; display: inline-flex; align-items: center; gap: 6px;
+      min-height: 38px; font-family: inherit;
+    }
+    .lb-btn:hover { background: rgba(255,255,255,0.22); }
+    .lb-close { font-size: 20px; padding: 6px 14px; }
+    .lb-stage {
+      flex: 1; min-height: 0; overflow: auto; position: relative;
+      display: flex; align-items: center; justify-content: center;
+      -webkit-overflow-scrolling: touch;
+    }
+    .lb-stage img {
+      max-width: 100%; max-height: 100%; object-fit: contain;
+      cursor: zoom-in; user-select: none; -webkit-user-drag: none;
+    }
+    .lb-stage.zoomed { display: block; }
+    .lb-stage.zoomed img {
+      max-width: none; max-height: none; width: 220%; cursor: zoom-out;
+    }
+    .lb-nav {
+      position: absolute; top: 50%; transform: translateY(-50%);
+      background: rgba(0,0,0,0.5); color: #fff; border: 1px solid rgba(255,255,255,0.2);
+      width: 44px; height: 44px; border-radius: 50%; font-size: 22px; cursor: pointer;
+      display: flex; align-items: center; justify-content: center; z-index: 2;
+    }
+    .lb-nav.prev { left: 10px; } .lb-nav.next { right: 10px; }
+    .lb-nav[disabled] { display: none; }
+    .lb-caption {
+      color: #fff; padding: 10px 18px calc(env(safe-area-inset-bottom, 0px) + 14px);
+      font-size: 14px; line-height: 1.45; text-align: center; flex-shrink: 0;
+      max-height: 22vh; overflow: auto;
+    }
+    .lb-caption small { display: block; opacity: .65; margin-top: 4px; font-size: 12px; }
+    .img-preview-wrap img { cursor: zoom-in; }
+    .img-preview-hint { text-align: center; font-size: 11px; opacity: .6; margin: -6px 0 10px; }
   </style>
 </head>
 <body>
@@ -2002,6 +2054,23 @@
     </div>
   </div>
 
+  <!-- Image Full Preview -->
+  <div class="lb-overlay" id="lbOverlay">
+    <div class="lb-top">
+      <button class="lb-btn lb-close" id="lbClose" title="Close">✕</button>
+      <span class="lb-count" id="lbCount"></span>
+      <span class="lb-spacer"></span>
+      <a class="lb-btn" id="lbDownload" download="image.jpg" target="_blank" rel="noopener">⬇ Save</a>
+      <button class="lb-btn" id="lbEdit">✎ Edit details</button>
+    </div>
+    <div class="lb-stage" id="lbStage">
+      <button class="lb-nav prev" id="lbPrev" title="Previous">‹</button>
+      <img id="lbImg" src="" alt="">
+      <button class="lb-nav next" id="lbNext" title="Next">›</button>
+    </div>
+    <div class="lb-caption" id="lbCaption"></div>
+  </div>
+
   <!-- Image Metadata Modal -->
   <div class="modal-overlay" id="imgMetaModal">
     <div class="img-modal">
@@ -2009,6 +2078,7 @@
       <div class="img-preview-wrap">
         <img id="imgPreview" src="" alt="Preview">
       </div>
+      <div class="img-preview-hint">Tap image to preview full size</div>
       <div class="field">
         <label>Description</label>
         <textarea id="imgDesc" placeholder="Write a short description..."></textarea>
@@ -2190,36 +2260,46 @@
       r.readAsDataURL(file);
     });
   }
+  // Image -> compressed base64 code (data URL). Firestore documents are limited to
+  // 1 MiB, so we shrink step by step until the base64 text is small enough.
+  const MAX_IMAGE_CHARS = 780000;   // ~760 KB of base64 text, safely under 1 MiB
   function compressImage(file) {
     return new Promise(resolve => {
       const url = URL.createObjectURL(file);
       const img = new Image();
       img.onload = () => {
         try {
-          const MAX = 1600;
           const w = img.naturalWidth, h = img.naturalHeight;
-          const scale = Math.min(1, MAX / Math.max(w, h));
-          if (scale === 1 && file.size < 600 * 1024) {
-            URL.revokeObjectURL(url);
-            return fileToDataURL(file).then(resolve, () => resolve(null));
+          const sizes = [1600, 1280, 1024, 800, 640, 480];
+          const qualities = [0.82, 0.7, 0.58, 0.46];
+          for (const MAX of sizes) {
+            const scale = Math.min(1, MAX / Math.max(w, h));
+            const canvas = document.createElement('canvas');
+            canvas.width = Math.max(1, Math.round(w * scale));
+            canvas.height = Math.max(1, Math.round(h * scale));
+            const ctx = canvas.getContext('2d');
+            ctx.fillStyle = '#fff';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+            for (const q of qualities) {
+              const out = canvas.toDataURL('image/jpeg', q);
+              if (out.length <= MAX_IMAGE_CHARS) {
+                URL.revokeObjectURL(url);
+                return resolve(out);
+              }
+            }
           }
-          const canvas = document.createElement('canvas');
-          canvas.width = Math.round(w * scale);
-          canvas.height = Math.round(h * scale);
-          const ctx = canvas.getContext('2d');
-          ctx.fillStyle = '#fff';
-          ctx.fillRect(0, 0, canvas.width, canvas.height);
-          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
           URL.revokeObjectURL(url);
-          resolve(canvas.toDataURL('image/jpeg', 0.82));
+          resolve(null);
         } catch (e) {
           URL.revokeObjectURL(url);
-          fileToDataURL(file).then(resolve, () => resolve(null));
+          resolve(null);
         }
       };
       img.onerror = () => {
         URL.revokeObjectURL(url);
-        fileToDataURL(file).then(resolve, () => resolve(null));
+        // browser cannot decode (e.g. HEIC) – only usable if the raw file is already small
+        fileToDataURL(file).then(d => resolve(d && d.length <= MAX_IMAGE_CHARS ? d : null), () => resolve(null));
       };
       img.src = url;
     });
@@ -2236,7 +2316,7 @@
       notes = await loadCollection('notes');
       imageFolders = await loadCollection('imageFolders');
       const imgMetas = await loadCollection('images');
-      images = imgMetas.map(m => ({ ...m, data: m.url || '' })); // url becomes data for display
+      images = imgMetas.map(m => ({ ...m, data: m.data || m.url || '' })); // saved base64 code first, old Storage url as fallback
 
       const vidMetas = await loadCollection('videos');
       videos = vidMetas.map(v => ({ ...v, url: v.url || '' }));
@@ -3239,10 +3319,13 @@
 
   async function processImageFiles(files) {
     pendingQueue = [];
+    const failed = [];
     for (const f of files) {
       const data = await compressImage(f);
       if (data) pendingQueue.push({ name: f.name, data });
+      else failed.push(f.name);
     }
+    if (failed.length) alert('These photos could not be converted to image code:\n' + failed.join('\n'));
     queueTotal = pendingQueue.length;
     nextPendingImage();
   }
@@ -3304,22 +3387,14 @@
           img.date = dateVal;
           img.updated = Date.now();
           await saveDoc('images', img.id, {
-            folderId: img.folderId,
-            name: img.name,
             description: desc,
             date: dateVal,
-            created: img.created,
-            updated: img.updated,
-            storagePath: img.storagePath || `images/${img.id}`,
-            url: img.url || img.data
+            updated: img.updated
           });
           renderImages();
         }
       } else if (pendingImageData && currentImageFolderId) {
         const id = uid();
-        const storagePath = `images/${id}`;
-        // Upload to Storage
-        const url = await uploadImageBlob(id, pendingImageData.data);
         const img = {
           id,
           folderId: currentImageFolderId,
@@ -3328,11 +3403,9 @@
           date: dateVal,
           created: Date.now(),
           updated: Date.now(),
-          storagePath,
-          url,
-          data: url          // for immediate display
+          data: pendingImageData.data      // image converted to base64 code
         };
-        images.unshift(img);
+        // Save the code in the database FIRST; only show it if saving worked
         await saveDoc('images', id, {
           folderId: img.folderId,
           name: img.name,
@@ -3340,9 +3413,9 @@
           date: dateVal,
           created: img.created,
           updated: img.updated,
-          storagePath,
-          url
+          data: img.data
         });
+        images.unshift(img);
         renderImages();
         continueQueue = pendingQueue.length > 0;
       }
@@ -3378,6 +3451,7 @@
       folderImages = folderImages.filter(i => i.date === searchDate);
     }
 
+    lastRenderedImages = folderImages;
     if (folderImages.length === 0) {
       const hasFilters = searchText || searchDate;
       grid.innerHTML = hasFilters
@@ -3419,10 +3493,105 @@
       card.addEventListener('click', e => {
         if (e.target.classList.contains('book-delete')) return;
         const img = images.find(i => i.id === card.dataset.id);
-        if (img) openImgMetaModal(img);
+        if (img) openLightbox(img.id);
       });
     });
   }
+
+  // ========== IMAGE PREVIEW (LIGHTBOX) ==========
+  let lastRenderedImages = [];
+  let lbList = [];
+  let lbIndex = 0;
+
+  function lbOpen() { return document.getElementById('lbOverlay').classList.contains('show'); }
+
+  function openLightbox(id) {
+    lbList = lastRenderedImages.slice();
+    lbIndex = Math.max(0, lbList.findIndex(i => i.id === id));
+    renderLightbox();
+    document.getElementById('lbOverlay').classList.add('show');
+  }
+
+  function openLightboxSingle(src) {
+    lbList = [{ id: '__pending__', pending: true, data: src, name: '' }];
+    lbIndex = 0;
+    renderLightbox();
+    document.getElementById('lbOverlay').classList.add('show');
+  }
+
+  function renderLightbox() {
+    const item = lbList[lbIndex];
+    if (!item) return;
+    const src = item.data || item.url || '';
+    const stage = document.getElementById('lbStage');
+    stage.classList.remove('zoomed');
+    stage.scrollTop = 0; stage.scrollLeft = 0;
+    document.getElementById('lbImg').src = src;
+    document.getElementById('lbCount').textContent = lbList.length > 1 ? `${lbIndex + 1} / ${lbList.length}` : '';
+    const dl = document.getElementById('lbDownload');
+    dl.href = src;
+    dl.setAttribute('download', (item.name || 'image').replace(/\.[^.]+$/, '') + '.jpg');
+    document.getElementById('lbEdit').style.display = item.pending ? 'none' : '';
+    document.getElementById('lbPrev').disabled = lbIndex <= 0;
+    document.getElementById('lbNext').disabled = lbIndex >= lbList.length - 1;
+    const cap = document.getElementById('lbCaption');
+    if (item.pending) { cap.innerHTML = ''; }
+    else {
+      const dateText = item.date ? formatImgDate(item.date) : formatDate(item.created);
+      cap.innerHTML = escapeHtml(item.description || item.name || 'No description') + '<small>' + escapeHtml(dateText) + '</small>';
+    }
+  }
+
+  function closeLightbox() {
+    document.getElementById('lbOverlay').classList.remove('show');
+    document.getElementById('lbImg').src = '';
+  }
+  function lbStep(d) {
+    const n = lbIndex + d;
+    if (n < 0 || n >= lbList.length) return;
+    lbIndex = n;
+    renderLightbox();
+  }
+
+  document.getElementById('lbClose').addEventListener('click', closeLightbox);
+  document.getElementById('lbPrev').addEventListener('click', e => { e.stopPropagation(); lbStep(-1); });
+  document.getElementById('lbNext').addEventListener('click', e => { e.stopPropagation(); lbStep(1); });
+  document.getElementById('lbEdit').addEventListener('click', () => {
+    const item = lbList[lbIndex];
+    closeLightbox();
+    if (item && !item.pending) openImgMetaModal(item);
+  });
+  document.getElementById('lbImg').addEventListener('click', () => {
+    const stage = document.getElementById('lbStage');
+    stage.classList.toggle('zoomed');
+    if (stage.classList.contains('zoomed')) {
+      requestAnimationFrame(() => {
+        stage.scrollLeft = (stage.scrollWidth - stage.clientWidth) / 2;
+        stage.scrollTop = (stage.scrollHeight - stage.clientHeight) / 2;
+      });
+    }
+  });
+  document.getElementById('imgPreview').addEventListener('click', () => {
+    const s = document.getElementById('imgPreview').getAttribute('src');
+    if (s) openLightboxSingle(s);
+  });
+  // swipe left/right
+  (function () {
+    let sx = 0, sy = 0;
+    const st = document.getElementById('lbStage');
+    st.addEventListener('touchstart', e => { sx = e.touches[0].clientX; sy = e.touches[0].clientY; }, { passive: true });
+    st.addEventListener('touchend', e => {
+      if (st.classList.contains('zoomed')) return;
+      const dx = e.changedTouches[0].clientX - sx, dy = e.changedTouches[0].clientY - sy;
+      if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) * 1.5) lbStep(dx < 0 ? 1 : -1);
+    }, { passive: true });
+  })();
+  document.addEventListener('keydown', e => {
+    if (!lbOpen()) return;
+    if (e.key === 'Escape') closeLightbox();
+    else if (e.key === 'ArrowLeft') lbStep(-1);
+    else if (e.key === 'ArrowRight') lbStep(1);
+  });
 
   function formatImgDate(dateStr) {
     if (!dateStr) return '';
@@ -3498,6 +3667,7 @@
 
   // ========== BACK NAVIGATION ==========
   function getBackAction() {
+    if (lbOpen()) return () => closeLightbox();
     const modal = document.querySelector('.modal-overlay.show');
     if (modal) {
       return () => {
